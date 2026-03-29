@@ -15,6 +15,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 
 TARGET_URL = "https://colab.research.google.com/drive/15i-UxCR47BFiehVg-2Z6tUQCyyG_iXel"
@@ -22,14 +23,29 @@ WAIT_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 1.5
 
 
-def run_osascript(script: str) -> subprocess.CompletedProcess[str]:
-    """Execute AppleScript and return the completed process."""
-    return subprocess.run(
+def log(message: str) -> None:
+    """Print timestamped logs to terminal for easier troubleshooting."""
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {message}", flush=True)
+
+
+def run_osascript(script: str, stage: str) -> subprocess.CompletedProcess[str]:
+    """Execute AppleScript and return the completed process with stage logging."""
+    log(f"{stage}: running osascript")
+    proc = subprocess.run(
         ["osascript", "-e", script],
         check=True,
         text=True,
         capture_output=True,
     )
+    stdout = proc.stdout.strip()
+    stderr = proc.stderr.strip()
+    if stdout:
+        log(f"{stage}: osascript stdout -> {stdout}")
+    if stderr:
+        log(f"{stage}: osascript stderr -> {stderr}")
+    log(f"{stage}: done")
+    return proc
 
 
 def open_colab_in_new_window() -> None:
@@ -42,11 +58,11 @@ def open_colab_in_new_window() -> None:
         set URL of newDoc to "{TARGET_URL}"
     end tell
     '''
-    run_osascript(applescript)
+    run_osascript(applescript, stage="open_colab_in_new_window")
 
 
-def try_click_run_all() -> bool:
-    """Try to click 'Run all' button in the active Safari tab via JavaScript."""
+def query_run_all_state() -> str:
+    """Return JS state string describing if Run all was clicked/found/loading."""
     js = r'''(() => {
       const targets = [
         'Run all',
@@ -85,33 +101,47 @@ def try_click_run_all() -> bool:
     end tell
     '''
 
-    result = run_osascript(applescript).stdout.strip()
-    return result == "clicked"
+    result = run_osascript(applescript, stage="query_run_all_state").stdout.strip()
+    return result or "empty_result"
 
 
 def wait_and_click_run_all(timeout_seconds: int = WAIT_TIMEOUT_SECONDS) -> bool:
     """Poll page for 'Run all' and click it when available."""
     deadline = time.time() + timeout_seconds
+    attempt = 0
     while time.time() < deadline:
+        attempt += 1
+        log(f"wait_and_click_run_all: attempt #{attempt}")
         try:
-            if try_click_run_all():
+            state = query_run_all_state()
+            log(f"wait_and_click_run_all: state={state}")
+            if state == "clicked":
                 return True
-        except subprocess.CalledProcessError:
-            # Page may still be loading; retry until timeout.
-            pass
+        except subprocess.CalledProcessError as exc:
+            log(f"wait_and_click_run_all: osascript error on attempt #{attempt}: {exc}")
+            if exc.stderr:
+                log(f"wait_and_click_run_all: osascript stderr -> {exc.stderr.strip()}")
         time.sleep(POLL_INTERVAL_SECONDS)
+
+    log("wait_and_click_run_all: timeout reached")
     return False
 
 
 def main() -> int:
+    log("Script started")
     try:
+        log("Step 1: open Safari + Colab URL in a new window")
         open_colab_in_new_window()
+
+        log("Step 2: wait for page and click 'Run all'")
         clicked = wait_and_click_run_all()
 
         if clicked:
+            log("Success: 'Run all' clicked")
             print("Safari activated, URL opened, and 'Run all' clicked.")
             return 0
 
+        log("Warning: 'Run all' was not found within timeout")
         print(
             "Safari activated and URL opened, but 'Run all' was not found within timeout. "
             "Open page manually and click it once if needed.",
@@ -121,10 +151,14 @@ def main() -> int:
 
     except FileNotFoundError:
         # osascript exists only on macOS; this makes the failure reason explicit.
+        log("Error: osascript was not found")
         print("Error: 'osascript' not found. This script must be run on macOS.", file=sys.stderr)
         return 1
     except subprocess.CalledProcessError as exc:
         # Typical reason: macOS Automation permission denied by user/system policy.
+        log(f"Fatal AppleScript error: {exc}")
+        if exc.stderr:
+            log(f"Fatal AppleScript stderr: {exc.stderr.strip()}")
         print(f"Failed to control Safari via AppleScript: {exc}", file=sys.stderr)
         print(
             "If prompted, allow Terminal (or your Python app) to control Safari in "
