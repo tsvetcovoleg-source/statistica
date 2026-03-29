@@ -12,6 +12,7 @@ Note: On first run, macOS may ask for Automation / Apple Events permission.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import time
@@ -94,10 +95,11 @@ def query_run_all_state() -> str:
       return document.readyState === 'complete' ? 'ready_but_not_found' : 'loading';
     })();'''
 
+    js_apple = json.dumps(js)
     applescript = f'''
     tell application "Safari"
         if not (exists front document) then return "no_document"
-        return (do JavaScript {js!r} in front document)
+        return (do JavaScript {js_apple} in front document)
     end tell
     '''
 
