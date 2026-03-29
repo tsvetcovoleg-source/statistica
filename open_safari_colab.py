@@ -18,6 +18,7 @@ from pathlib import Path
 TARGET_URL = "https://colab.research.google.com/drive/15i-UxCR47BFiehVg-2Z6tUQCyyG_iXel"
 WAIT_BEFORE_DUMP_SECONDS = 8
 OUTPUT_FILE = Path.home() / "Downloads" / "colab_page_source.txt"
+DOM_OUTPUT_FILE = Path.home() / "Downloads" / "colab_dom_snapshot.txt"
 
 
 def log(message: str) -> None:
@@ -97,6 +98,17 @@ def get_front_page_html() -> str:
     return run_osascript(applescript, stage="get_front_page_html").stdout
 
 
+def get_front_page_dom_snapshot() -> str:
+    """Get live DOM snapshot via JavaScript (requires Safari Develop setting)."""
+    applescript = '''
+    tell application "Safari"
+        if not (exists front document) then return ""
+        return (do JavaScript "document.documentElement.outerHTML" in front document)
+    end tell
+    '''
+    return run_osascript(applescript, stage="get_front_page_dom_snapshot").stdout
+
+
 def main() -> int:
     log("Script started")
     try:
@@ -116,7 +128,27 @@ def main() -> int:
 
         OUTPUT_FILE.write_text(html, encoding="utf-8")
         log(f"Saved page source to: {OUTPUT_FILE}")
-        print(f"OK. HTML saved to: {OUTPUT_FILE}")
+        print(f"OK. Page source saved to: {OUTPUT_FILE}")
+
+        # Try to get dynamic DOM too (useful for JS-rendered UI like Colab buttons).
+        try:
+            dom_html = get_front_page_dom_snapshot()
+            if dom_html.strip():
+                DOM_OUTPUT_FILE.write_text(dom_html, encoding="utf-8")
+                log(f"Saved live DOM snapshot to: {DOM_OUTPUT_FILE}")
+                print(f"OK. Live DOM snapshot saved to: {DOM_OUTPUT_FILE}")
+            else:
+                log("Live DOM snapshot was empty")
+        except subprocess.CalledProcessError as exc:
+            if "Allow JavaScript from Apple Events" in (exc.stderr or ""):
+                print(
+                    "Live DOM snapshot is blocked by Safari setting. "
+                    "Enable Develop -> Allow JavaScript from Apple Events, then run again.",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"Live DOM snapshot failed: {exc}", file=sys.stderr)
+
         return 0
 
     except FileNotFoundError:
