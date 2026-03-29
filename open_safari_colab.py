@@ -69,7 +69,25 @@ def get_front_page_info() -> str:
 
 
 def get_front_page_html() -> str:
-    """Get current front document HTML via JavaScript in Safari."""
+    """Get current front document HTML in Safari.
+
+    Tries native `source of front document` first (no Develop-menu toggle needed).
+    Falls back to `do JavaScript` only if needed.
+    """
+    applescript_source = '''
+    tell application "Safari"
+        if not (exists front document) then return ""
+        return (source of front document)
+    end tell
+    '''
+    try:
+        return run_osascript(applescript_source, stage="get_front_page_html_source").stdout
+    except subprocess.CalledProcessError as exc:
+        log(f"get_front_page_html_source failed: {exc}")
+        if exc.stderr:
+            log(f"get_front_page_html_source stderr: {exc.stderr.strip()}")
+
+    # Fallback path for cases where `source` is unavailable.
     applescript = '''
     tell application "Safari"
         if not (exists front document) then return ""
@@ -105,6 +123,12 @@ def main() -> int:
         print("Error: 'osascript' not found. This script must be run on macOS.", file=sys.stderr)
         return 1
     except subprocess.CalledProcessError as exc:
+        if "Allow JavaScript from Apple Events" in (exc.stderr or ""):
+            print(
+                "Safari blocks 'do JavaScript'. Enable Develop -> Allow JavaScript from Apple Events, "
+                "then run the script again.",
+                file=sys.stderr,
+            )
         print(f"AppleScript error: {exc}", file=sys.stderr)
         if exc.stderr:
             print(exc.stderr.strip(), file=sys.stderr)
