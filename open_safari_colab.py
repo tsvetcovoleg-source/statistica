@@ -4,7 +4,7 @@
 This script:
 1) Launches Safari if it is not running.
 2) Brings Safari to the foreground if it is already running.
-3) Opens the target Google Colab URL.
+3) Opens a NEW Safari window and navigates it to the target Google Colab URL.
 
 Note: On first run, macOS may ask for Automation / Apple Events permission.
 """
@@ -21,13 +21,15 @@ def main() -> int:
     applescript = f'''
     tell application "Safari"
         activate
-        open location "{TARGET_URL}"
+        -- Create a separate new window so current browsing work is not disturbed.
+        set newDoc to make new document
+        set URL of newDoc to "{TARGET_URL}"
     end tell
     '''
 
     try:
         # Run AppleScript via osascript. If Safari is closed, it will launch it.
-        # If Safari is already open, it will move it to the foreground.
+        # If Safari is already open, it will move it to the foreground and use a new window.
         subprocess.run(["osascript", "-e", applescript], check=True)
         print("Safari activated and URL opened successfully.")
         return 0
