@@ -17,7 +17,7 @@ from pathlib import Path
 
 TARGET_URL = "https://colab.research.google.com/drive/15i-UxCR47BFiehVg-2Z6tUQCyyG_iXel"
 WAIT_BEFORE_DUMP_SECONDS = 8
-OUTPUT_FILE = Path.home() / "Downloads" / "colab_page_source.html"
+OUTPUT_FILE = Path.home() / "Downloads" / "colab_page_source.txt"
 
 
 def log(message: str) -> None:
