@@ -87,7 +87,7 @@ def query_run_all_state() -> str:
         return true;
       };
 
-      const candidates = Array.from(document.querySelectorAll('button,[role="button"],div,span,a'));
+      const candidates = Array.from(document.querySelectorAll('button,[role=button],div,span,a'));
       for (const el of candidates) {
         if (clickIfMatch(el)) return 'clicked';
       }
@@ -107,6 +107,19 @@ def query_run_all_state() -> str:
     return result or "empty_result"
 
 
+def query_front_page_info() -> str:
+    """Return Safari front document title and URL for debugging."""
+    applescript = '''
+    tell application "Safari"
+        if not (exists front document) then return "no_document"
+        set docTitle to (name of front document)
+        set docURL to (URL of front document)
+        return "title=" & docTitle & " | url=" & docURL
+    end tell
+    '''
+    return run_osascript(applescript, stage="query_front_page_info").stdout.strip() or "empty_page_info"
+
+
 def wait_and_click_run_all(timeout_seconds: int = WAIT_TIMEOUT_SECONDS) -> bool:
     """Poll page for 'Run all' and click it when available."""
     deadline = time.time() + timeout_seconds
@@ -115,6 +128,8 @@ def wait_and_click_run_all(timeout_seconds: int = WAIT_TIMEOUT_SECONDS) -> bool:
         attempt += 1
         log(f"wait_and_click_run_all: attempt #{attempt}")
         try:
+            page_info = query_front_page_info()
+            log(f"wait_and_click_run_all: page_info={page_info}")
             state = query_run_all_state()
             log(f"wait_and_click_run_all: state={state}")
             if state == "clicked":
