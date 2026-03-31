@@ -279,13 +279,34 @@ def get_first_profile_links(ws_source, limit=5):
         profile_url = row[profile_col_idx].strip() if len(row) > profile_col_idx else ""
         status = row[status_col_idx].strip().lower() if len(row) > status_col_idx else ""
 
-        if "/economic-agent/" in profile_url and status in {"", "found", "done", "partial"}:
+        if "/economic-agent/" in profile_url and status in {"", "found", "partial"}:
             links.append(profile_url)
 
         if len(links) >= limit:
             break
 
     return links
+
+
+def mark_link_done(ws_source, profile_url):
+    values = ws_source.get_all_values()
+    if not values:
+        return False
+
+    # По задаче статус Done должен ставиться в колонке D.
+    done_col_idx = 3
+    required_cols = done_col_idx + 1
+
+    if len(values[0]) < required_cols:
+        ws_source.add_cols(required_cols - len(values[0]))
+
+    for row_idx, row in enumerate(values[1:], start=2):
+        row_profile_url = row[1].strip() if len(row) > 1 else ""
+        if row_profile_url == profile_url:
+            ws_source.update_cell(row_idx, done_col_idx + 1, "Done")
+            return True
+
+    return False
 
 
 async def process_all_periods(profile_url, ws):
@@ -356,6 +377,9 @@ async def run_profile_links_pipeline(ws_source, ws_result, limit=5):
         try:
             found_count, inserted_count = await process_all_periods(profile_url, ws_result)
             print(f"Reports found: {found_count} | inserted/updated: {inserted_count}")
+            if found_count > 0 and inserted_count >= found_count:
+                mark_link_done(ws_source, profile_url)
+                print("Source status in column D: Done")
         except Exception as exc:
             print(f"{profile_url} | fatal error: {exc}")
         await asyncio.sleep(2)
