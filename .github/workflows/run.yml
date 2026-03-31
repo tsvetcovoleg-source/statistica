@@ -3,8 +3,7 @@ name: Run scraper
 on:
   workflow_dispatch:
   pull_request:
-  schedule:
-    - cron: "*/5 * * * *"
+
 
 jobs:
   run:
