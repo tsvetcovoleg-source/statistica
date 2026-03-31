@@ -307,12 +307,43 @@ def get_or_create_result_worksheet(spreadsheet, title, rows=2000, cols=20):
     return get_or_create_worksheet(spreadsheet, title, rows=rows, cols=cols)
 
 
+def worksheet_has_required_source_columns(worksheet):
+    values = worksheet.get_all_values()
+    if not values:
+        return False
+    header = {str(cell).strip().upper() for cell in values[0]}
+    return {"IDNO", "PROFILE_URL", "STATUS"}.issubset(header)
+
+
 def get_required_source_worksheet(spreadsheet, title):
     try:
         return spreadsheet.worksheet(title)
     except gspread.WorksheetNotFound as exc:
+        fallback_titles = ["links", "Links", "LINKS"]
+        for fallback_title in fallback_titles:
+            try:
+                worksheet = spreadsheet.worksheet(fallback_title)
+                if worksheet_has_required_source_columns(worksheet):
+                    print(
+                        f"Source sheet '{title}' was not found. "
+                        f"Using fallback source sheet '{worksheet.title}'."
+                    )
+                    return worksheet
+            except gspread.WorksheetNotFound:
+                continue
+
+        for worksheet in spreadsheet.worksheets():
+            if worksheet_has_required_source_columns(worksheet):
+                print(
+                    f"Source sheet '{title}' was not found. "
+                    f"Using detected source sheet '{worksheet.title}'."
+                )
+                return worksheet
+
         raise RuntimeError(
-            f"Source sheet '{title}' was not found. Create it first and add columns IDNO, PROFILE_URL, STATUS."
+            f"Source sheet '{title}' was not found. "
+            "Set SOURCE_SHEET_NAME to the correct tab name (for example 'links') "
+            "or create a tab with columns IDNO, PROFILE_URL, STATUS."
         ) from exc
 
 
