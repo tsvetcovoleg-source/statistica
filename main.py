@@ -295,11 +295,21 @@ async def run_profile_links_pipeline(ws_source, ws_result, limit=5):
         await asyncio.sleep(2)
 
 
+def get_or_create_result_worksheet(spreadsheet, title, rows=2000, cols=20):
 def get_or_create_worksheet(spreadsheet, title, rows=2000, cols=20):
     try:
         return spreadsheet.worksheet(title)
     except gspread.WorksheetNotFound:
         return spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
+
+
+def get_required_source_worksheet(spreadsheet, title):
+    try:
+        return spreadsheet.worksheet(title)
+    except gspread.WorksheetNotFound as exc:
+        raise RuntimeError(
+            f"Source sheet '{title}' was not found. Create it first and add columns IDNO, PROFILE_URL, STATUS."
+        ) from exc
 
 
 async def main():
@@ -308,6 +318,7 @@ async def main():
     service_account_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
     sheet_id = os.environ["GOOGLE_SHEET_ID"]
 
+    source_sheet_name = os.environ.get("SOURCE_SHEET_NAME", "links")
     source_sheet_name = os.environ.get("SOURCE_SHEET_NAME", "IDNO")
     result_sheet_name = os.environ.get("RESULT_SHEET_NAME", "stat")
     max_links = int(os.environ.get("MAX_PROFILE_LINKS", "5"))
@@ -323,6 +334,8 @@ async def main():
     gc = gspread.authorize(creds)
     sh = gc.open_by_key(sheet_id)
 
+    ws_source = get_required_source_worksheet(sh, source_sheet_name)
+    ws_result = get_or_create_result_worksheet(sh, result_sheet_name)
     ws_source = get_or_create_worksheet(sh, source_sheet_name)
     ws_result = get_or_create_worksheet(sh, result_sheet_name)
 
