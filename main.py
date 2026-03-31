@@ -167,10 +167,6 @@ def upsert_report_to_sheet(ws, source_profile_url, report_data):
         "CF": f"REPORT_KEY={report_key}\n{cashflow_csv}",
     }
 
-    report_headers = {
-        section: f"{report_key} | {section}" for section in ["META", "BIL", "PNL", "EQT", "CF"]
-    }
-
     headers = ["IDNO", "PROFILE_URL"]
     all_values = ws.get_all_values()
 
@@ -190,14 +186,6 @@ def upsert_report_to_sheet(ws, source_profile_url, report_data):
         current_header = all_values[0]
         header_map = {name: idx for idx, name in enumerate(current_header)}
 
-    missing_report_headers = [h for h in report_headers.values() if h not in header_map]
-    if missing_report_headers:
-        current_header.extend(missing_report_headers)
-        ws.update(range_name="1:1", values=[current_header])
-        all_values = ws.get_all_values()
-        current_header = all_values[0]
-        header_map = {name: idx for idx, name in enumerate(current_header)}
-
     rows = all_values[1:] if len(all_values) > 1 else []
     target_row_index = None
 
@@ -208,21 +196,61 @@ def upsert_report_to_sheet(ws, source_profile_url, report_data):
             target_row_index = i
             break
 
+    report_sections = ["META", "BIL", "PNL", "EQT", "CF"]
+
     if target_row_index is None:
-        new_row = [""] * len(current_header)
-        new_row[header_map["IDNO"]] = idno_value
-        new_row[header_map["PROFILE_URL"]] = source_profile_url
-        for section, header_name in report_headers.items():
-            new_row[header_map[header_name]] = prefixed_values[section]
-        ws.append_row(new_row)
+        padded_row = [""] * len(current_header)
     else:
         existing_row = rows[target_row_index - 2]
         padded_row = existing_row + [""] * (len(current_header) - len(existing_row))
-        padded_row[header_map["IDNO"]] = idno_value
-        padded_row[header_map["PROFILE_URL"]] = source_profile_url
-        for section, header_name in report_headers.items():
-            padded_row[header_map[header_name]] = prefixed_values[section]
 
+    padded_row[header_map["IDNO"]] = idno_value
+    padded_row[header_map["PROFILE_URL"]] = source_profile_url
+
+    start_col = 2
+    block_size = len(report_sections)
+    report_block_start = None
+
+    def is_matching_report_block(row_values, block_start, key):
+        if len(row_values) <= block_start:
+            return False
+        cell = str(row_values[block_start]).strip()
+        return cell.startswith(f"REPORT_KEY={key}\n")
+
+    for block_start in range(start_col, len(padded_row), block_size):
+        if is_matching_report_block(padded_row, block_start, report_key):
+            report_block_start = block_start
+            break
+
+    if report_block_start is None:
+        for block_start in range(start_col, len(padded_row), block_size):
+            block = padded_row[block_start:block_start + block_size]
+            if not block or all(not str(cell).strip() for cell in block):
+                report_block_start = block_start
+                break
+
+    if report_block_start is None:
+        report_block_start = len(padded_row)
+
+    required_len = report_block_start + block_size
+    if len(padded_row) < required_len:
+        padded_row.extend([""] * (required_len - len(padded_row)))
+
+    while len(current_header) < required_len:
+        report_number = ((len(current_header) - start_col) // block_size) + 1
+        for section in report_sections:
+            current_header.append(f"REPORT_{report_number}_{section}")
+            if len(current_header) >= required_len:
+                break
+
+    for offset, section in enumerate(report_sections):
+        padded_row[report_block_start + offset] = prefixed_values[section]
+
+    ws.update(range_name="1:1", values=[current_header])
+
+    if target_row_index is None:
+        ws.append_row(padded_row)
+    else:
         end_col_letter = gspread.utils.rowcol_to_a1(1, len(current_header)).rstrip("1")
         ws.update(
             range_name=f"A{target_row_index}:{end_col_letter}{target_row_index}",
