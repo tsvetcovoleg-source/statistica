@@ -159,38 +159,75 @@ def upsert_report_to_sheet(ws, source_profile_url, report_data):
     equity_csv = dataframe_to_csv_text(report_data["equity_df"], "EQT")
     cashflow_csv = dataframe_to_csv_text(report_data["cashflow_df"], "CF")
 
-    headers = [
-        "IDNO",
-        "PROFILE_URL",
-        "REPORT_KEY",
-        "META_CSV",
-        "BIL_CSV",
-        "PNL_CSV",
-        "EQT_CSV",
-        "CF_CSV",
-    ]
+    prefixed_values = {
+        "META": f"REPORT_KEY={report_key}\n{meta_csv}",
+        "BIL": f"REPORT_KEY={report_key}\n{bilan_csv}",
+        "PNL": f"REPORT_KEY={report_key}\n{pnl_csv}",
+        "EQT": f"REPORT_KEY={report_key}\n{equity_csv}",
+        "CF": f"REPORT_KEY={report_key}\n{cashflow_csv}",
+    }
+
+    report_headers = {
+        section: f"{report_key} | {section}" for section in ["META", "BIL", "PNL", "EQT", "CF"]
+    }
+
+    headers = ["IDNO", "PROFILE_URL"]
     all_values = ws.get_all_values()
 
     if not all_values:
         ws.append_row(headers)
         all_values = [headers]
 
+    current_header = all_values[0]
+    header_map = {name: idx for idx, name in enumerate(current_header)}
+
+    required_base_headers = ["IDNO", "PROFILE_URL"]
+    missing_base_headers = [h for h in required_base_headers if h not in header_map]
+    if missing_base_headers:
+        current_header.extend(missing_base_headers)
+        ws.update(range_name="1:1", values=[current_header])
+        all_values = ws.get_all_values()
+        current_header = all_values[0]
+        header_map = {name: idx for idx, name in enumerate(current_header)}
+
+    missing_report_headers = [h for h in report_headers.values() if h not in header_map]
+    if missing_report_headers:
+        current_header.extend(missing_report_headers)
+        ws.update(range_name="1:1", values=[current_header])
+        all_values = ws.get_all_values()
+        current_header = all_values[0]
+        header_map = {name: idx for idx, name in enumerate(current_header)}
+
     rows = all_values[1:] if len(all_values) > 1 else []
     target_row_index = None
 
     for i, row in enumerate(rows, start=2):
-        row_idno = row[0] if len(row) > 0 else ""
-        row_key = row[2] if len(row) > 2 else ""
-        if str(row_idno).strip() == idno_value and str(row_key).strip() == report_key:
+        idno_idx = header_map["IDNO"]
+        row_idno = row[idno_idx] if len(row) > idno_idx else ""
+        if str(row_idno).strip() == idno_value:
             target_row_index = i
             break
 
-    new_row = [idno_value, source_profile_url, report_key, meta_csv, bilan_csv, pnl_csv, equity_csv, cashflow_csv]
-
     if target_row_index is None:
+        new_row = [""] * len(current_header)
+        new_row[header_map["IDNO"]] = idno_value
+        new_row[header_map["PROFILE_URL"]] = source_profile_url
+        for section, header_name in report_headers.items():
+            new_row[header_map[header_name]] = prefixed_values[section]
         ws.append_row(new_row)
     else:
-        ws.update(range_name=f"A{target_row_index}:H{target_row_index}", values=[new_row])
+        existing_row = rows[target_row_index - 2]
+        padded_row = existing_row + [""] * (len(current_header) - len(existing_row))
+        padded_row[header_map["IDNO"]] = idno_value
+        padded_row[header_map["PROFILE_URL"]] = source_profile_url
+        for section, header_name in report_headers.items():
+            padded_row[header_map[header_name]] = prefixed_values[section]
+
+        end_col_letter = gspread.utils.rowcol_to_a1(1, len(current_header)).rstrip("1")
+        ws.update(
+            range_name=f"A{target_row_index}:{end_col_letter}{target_row_index}",
+            values=[padded_row],
+        )
 
     return True
 
