@@ -268,18 +268,26 @@ def get_first_profile_links(ws_source, limit=5):
     header = [str(cell).strip().upper() for cell in values[0]]
     profile_col_idx = 1
     status_col_idx = 2
+    done_col_idx = 3
 
     if "PROFILE_URL" in header:
         profile_col_idx = header.index("PROFILE_URL")
     if "STATUS" in header:
         status_col_idx = header.index("STATUS")
+    if "DONE" in header:
+        done_col_idx = header.index("DONE")
 
     links = []
     for row in values[1:]:
         profile_url = row[profile_col_idx].strip() if len(row) > profile_col_idx else ""
         status = row[status_col_idx].strip().lower() if len(row) > status_col_idx else ""
+        done_status = row[done_col_idx].strip().lower() if len(row) > done_col_idx else ""
 
-        if "/economic-agent/" in profile_url and status in {"", "found", "partial"}:
+        if (
+            "/economic-agent/" in profile_url
+            and status in {"", "found", "partial"}
+            and done_status != "done"
+        ):
             links.append(profile_url)
 
         if len(links) >= limit:
