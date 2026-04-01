@@ -11,7 +11,6 @@ from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 from playwright.async_api import async_playwright
 
-# test
 
 def clean_cell(value):
     if pd.isna(value):
@@ -145,7 +144,96 @@ def parse_financial_report(html):
     }
 
 
-def upsert_report_to_sheet(ws, source_profile_url, report_data):
+class ResultSheetCache:
+    def __init__(self, ws):
+        self.ws = ws
+        self.current_header = []
+        self.header_map = {}
+        self.rows = []
+        self.idno_to_row_index = {}
+        self._load()
+
+    def _load(self):
+        all_values = self.ws.get_all_values()
+        if not all_values:
+            self.current_header = ["IDNO", "PROFILE_URL"]
+            self.ws.append_row(self.current_header)
+            self.rows = []
+        else:
+            self.current_header = all_values[0]
+            self.rows = all_values[1:] if len(all_values) > 1 else []
+
+        self._ensure_base_headers()
+        self._rebuild_indexes()
+
+    def _ensure_base_headers(self):
+        required_base_headers = ["IDNO", "PROFILE_URL"]
+        missing = [h for h in required_base_headers if h not in self.current_header]
+        if not missing:
+            return
+        self.current_header.extend(missing)
+        self.ws.update(range_name="1:1", values=[self.current_header])
+
+    def _rebuild_indexes(self):
+        self.header_map = {name: idx for idx, name in enumerate(self.current_header)}
+        idno_idx = self.header_map.get("IDNO")
+        self.idno_to_row_index = {}
+        if idno_idx is None:
+            return
+
+        for i, row in enumerate(self.rows, start=2):
+            row_idno = row[idno_idx] if len(row) > idno_idx else ""
+            row_idno = str(row_idno).strip()
+            if row_idno:
+                self.idno_to_row_index[row_idno] = i
+
+    def ensure_header_len(self, required_len):
+        if len(self.current_header) >= required_len:
+            return
+
+        report_sections = ["META", "BIL", "PNL", "EQT", "CF"]
+        start_col = 2
+        block_size = len(report_sections)
+
+        while len(self.current_header) < required_len:
+            report_number = ((len(self.current_header) - start_col) // block_size) + 1
+            for section in report_sections:
+                self.current_header.append(f"REPORT_{report_number}_{section}")
+                if len(self.current_header) >= required_len:
+                    break
+
+        self.ws.update(range_name="1:1", values=[self.current_header])
+        self._rebuild_indexes()
+
+    def get_row_by_index(self, row_index):
+        idx = row_index - 2
+        if idx < 0 or idx >= len(self.rows):
+            return []
+        return self.rows[idx]
+
+    def save_row(self, row_index, padded_row):
+        if row_index is None:
+            self.ws.append_row(padded_row)
+            self.rows.append(padded_row)
+            new_row_index = len(self.rows) + 1
+            idno_idx = self.header_map["IDNO"]
+            row_idno = padded_row[idno_idx] if len(padded_row) > idno_idx else ""
+            row_idno = str(row_idno).strip()
+            if row_idno:
+                self.idno_to_row_index[row_idno] = new_row_index
+            return
+
+        end_col_letter = gspread.utils.rowcol_to_a1(1, len(self.current_header)).rstrip("1")
+        self.ws.update(
+            range_name=f"A{row_index}:{end_col_letter}{row_index}",
+            values=[padded_row],
+        )
+        self.rows[row_index - 2] = padded_row
+
+
+def upsert_report_to_sheet(ws, source_profile_url, report_data, cache=None):
+    cache = cache or ResultSheetCache(ws)
+
     info_map = get_info_map(report_data)
     idno_value = str(info_map.get("Cod IDNO", "")).strip()
     report_key = build_report_key(report_data)
@@ -167,41 +255,16 @@ def upsert_report_to_sheet(ws, source_profile_url, report_data):
         "CF": f"REPORT_KEY={report_key}\n{cashflow_csv}",
     }
 
-    headers = ["IDNO", "PROFILE_URL"]
-    all_values = ws.get_all_values()
-
-    if not all_values:
-        ws.append_row(headers)
-        all_values = [headers]
-
-    current_header = all_values[0]
-    header_map = {name: idx for idx, name in enumerate(current_header)}
-
-    required_base_headers = ["IDNO", "PROFILE_URL"]
-    missing_base_headers = [h for h in required_base_headers if h not in header_map]
-    if missing_base_headers:
-        current_header.extend(missing_base_headers)
-        ws.update(range_name="1:1", values=[current_header])
-        all_values = ws.get_all_values()
-        current_header = all_values[0]
-        header_map = {name: idx for idx, name in enumerate(current_header)}
-
-    rows = all_values[1:] if len(all_values) > 1 else []
-    target_row_index = None
-
-    for i, row in enumerate(rows, start=2):
-        idno_idx = header_map["IDNO"]
-        row_idno = row[idno_idx] if len(row) > idno_idx else ""
-        if str(row_idno).strip() == idno_value:
-            target_row_index = i
-            break
+    current_header = cache.current_header
+    header_map = cache.header_map
+    target_row_index = cache.idno_to_row_index.get(idno_value)
 
     report_sections = ["META", "BIL", "PNL", "EQT", "CF"]
 
     if target_row_index is None:
         padded_row = [""] * len(current_header)
     else:
-        existing_row = rows[target_row_index - 2]
+        existing_row = cache.get_row_by_index(target_row_index)
         padded_row = existing_row + [""] * (len(current_header) - len(existing_row))
 
     padded_row[header_map["IDNO"]] = idno_value
@@ -236,27 +299,15 @@ def upsert_report_to_sheet(ws, source_profile_url, report_data):
     if len(padded_row) < required_len:
         padded_row.extend([""] * (required_len - len(padded_row)))
 
-    while len(current_header) < required_len:
-        report_number = ((len(current_header) - start_col) // block_size) + 1
-        for section in report_sections:
-            current_header.append(f"REPORT_{report_number}_{section}")
-            if len(current_header) >= required_len:
-                break
+    cache.ensure_header_len(required_len)
+    current_header = cache.current_header
+    if len(padded_row) < len(current_header):
+        padded_row.extend([""] * (len(current_header) - len(padded_row)))
 
     for offset, section in enumerate(report_sections):
         padded_row[report_block_start + offset] = prefixed_values[section]
 
-    ws.update(range_name="1:1", values=[current_header])
-
-    if target_row_index is None:
-        ws.append_row(padded_row)
-    else:
-        end_col_letter = gspread.utils.rowcol_to_a1(1, len(current_header)).rstrip("1")
-        ws.update(
-            range_name=f"A{target_row_index}:{end_col_letter}{target_row_index}",
-            values=[padded_row],
-        )
-
+    cache.save_row(target_row_index, padded_row)
     return True
 
 
@@ -296,37 +347,52 @@ def get_first_profile_links(ws_source, limit=10):
     return links
 
 
-def mark_link_done(ws_source, profile_url):
-    values = ws_source.get_all_values()
-    if not values:
-        return False
+class SourceSheetCache:
+    def __init__(self, ws_source):
+        self.ws_source = ws_source
+        self.values = ws_source.get_all_values()
+        self.header = [str(cell).strip().upper() for cell in self.values[0]] if self.values else []
+        self.profile_col_idx = self.header.index("PROFILE_URL") if "PROFILE_URL" in self.header else 1
+        self.done_col_idx = self.header.index("DONE") if "DONE" in self.header else 3
+        self.profile_to_row_index = {}
 
-    # По задаче статус Done должен ставиться в колонке D.
-    done_col_idx = 3
-    required_cols = done_col_idx + 1
+        for row_idx, row in enumerate(self.values[1:], start=2):
+            row_profile_url = row[self.profile_col_idx].strip() if len(row) > self.profile_col_idx else ""
+            if row_profile_url:
+                self.profile_to_row_index[row_profile_url] = row_idx
 
-    if len(values[0]) < required_cols:
-        ws_source.add_cols(required_cols - len(values[0]))
+    def mark_link_done(self, profile_url):
+        if not self.values:
+            return False
 
-    for row_idx, row in enumerate(values[1:], start=2):
-        row_profile_url = row[1].strip() if len(row) > 1 else ""
-        if row_profile_url == profile_url:
-            ws_source.update_cell(row_idx, done_col_idx + 1, "Done")
-            return True
+        row_index = self.profile_to_row_index.get(profile_url)
+        if row_index is None:
+            return False
 
-    return False
+        required_cols = self.done_col_idx + 1
+        if len(self.header) < required_cols:
+            self.ws_source.add_cols(required_cols - len(self.header))
+            self.header.extend([""] * (required_cols - len(self.header)))
+
+        self.ws_source.update_cell(row_index, self.done_col_idx + 1, "Done")
+
+        row = self.values[row_index - 1]
+        if len(row) <= self.done_col_idx:
+            row.extend([""] * (self.done_col_idx + 1 - len(row)))
+        row[self.done_col_idx] = "Done"
+        return True
 
 
-async def process_all_periods(profile_url, ws):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-        )
-        page = await browser.new_page(viewport={"width": 1800, "height": 5000})
+def mark_link_done(ws_source, profile_url, source_cache=None):
+    source_cache = source_cache or SourceSheetCache(ws_source)
+    return source_cache.mark_link_done(profile_url)
 
-        await page.goto(profile_url, wait_until="networkidle", timeout=120000)
-        await page.wait_for_timeout(5000)
+
+async def process_all_periods(profile_url, ws, browser, result_cache=None):
+    page = await browser.new_page(viewport={"width": 1800, "height": 5000})
+    try:
+        await page.goto(profile_url, wait_until="domcontentloaded", timeout=120000)
+        await page.wait_for_selector('[role="tab"]', timeout=30000)
 
         tabs = page.locator('[role="tab"]')
         tab_opened = False
@@ -336,14 +402,14 @@ async def process_all_periods(profile_url, ws):
             text = (await tab.inner_text()).strip()
             if "Situaţii financiare publice" in text:
                 await tab.click()
-                await page.wait_for_timeout(3000)
+                await page.wait_for_load_state("networkidle")
                 tab_opened = True
                 break
 
         if not tab_opened:
-            await browser.close()
             return 0, 0
 
+        await page.locator("body").wait_for(timeout=15000)
         all_texts = await page.locator("body *").all_text_contents()
         periods = []
         for txt in all_texts:
@@ -361,36 +427,53 @@ async def process_all_periods(profile_url, ws):
                     continue
 
                 await period_btn.first.click()
-                await page.wait_for_timeout(4000)
+                await page.wait_for_load_state("networkidle")
+                await page.locator("table, body").first.wait_for(timeout=15000)
 
                 html = await page.content()
                 report_data = parse_financial_report(html)
-                saved = upsert_report_to_sheet(ws, profile_url, report_data)
+                saved = upsert_report_to_sheet(ws, profile_url, report_data, cache=result_cache)
                 if saved:
                     inserted_count += 1
             except Exception as exc:
                 print(f"{profile_url} | period={period} | error: {exc}")
 
-        await browser.close()
-
-    return len(periods), inserted_count
+        return len(periods), inserted_count
+    finally:
+        await page.close()
 
 
 async def run_profile_links_pipeline(ws_source, ws_result, limit=10):
     links = get_first_profile_links(ws_source, limit=limit)
     print(f"Found links for processing: {len(links)}")
 
-    for idx, profile_url in enumerate(links, start=1):
-        print(f"[{idx}/{len(links)}] {profile_url}")
-        try:
-            found_count, inserted_count = await process_all_periods(profile_url, ws_result)
-            print(f"Reports found: {found_count} | inserted/updated: {inserted_count}")
-            if found_count > 0 and inserted_count >= found_count:
-                mark_link_done(ws_source, profile_url)
-                print("Source status in column D: Done")
-        except Exception as exc:
-            print(f"{profile_url} | fatal error: {exc}")
-        await asyncio.sleep(2)
+    source_cache = SourceSheetCache(ws_source)
+    result_cache = ResultSheetCache(ws_result)
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+
+        for idx, profile_url in enumerate(links, start=1):
+            print(f"[{idx}/{len(links)}] {profile_url}")
+            try:
+                found_count, inserted_count = await process_all_periods(
+                    profile_url,
+                    ws_result,
+                    browser,
+                    result_cache=result_cache,
+                )
+                print(f"Reports found: {found_count} | inserted/updated: {inserted_count}")
+                if found_count > 0 and inserted_count >= found_count:
+                    mark_link_done(ws_source, profile_url, source_cache=source_cache)
+                    print("Source status in column D: Done")
+            except Exception as exc:
+                print(f"{profile_url} | fatal error: {exc}")
+            await asyncio.sleep(2)
+
+        await browser.close()
 
 
 def get_or_create_worksheet(spreadsheet, title, rows=2000, cols=20):
