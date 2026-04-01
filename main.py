@@ -321,7 +321,7 @@ async def process_all_periods(profile_url, ws, browser):
     page = await browser.new_page(viewport={"width": 1800, "height": 5000})
     try:
         await page.goto(profile_url, wait_until="networkidle", timeout=120000)
-        await page.wait_for_timeout(5000)
+        await page.wait_for_timeout(3500)
 
         tabs = page.locator('[role="tab"]')
         tab_opened = False
@@ -331,7 +331,7 @@ async def process_all_periods(profile_url, ws, browser):
             text = (await tab.inner_text()).strip()
             if "Situaţii financiare publice" in text:
                 await tab.click()
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(2200)
                 tab_opened = True
                 break
 
@@ -355,7 +355,7 @@ async def process_all_periods(profile_url, ws, browser):
                     continue
 
                 await period_btn.first.click()
-                await page.wait_for_timeout(4000)
+                await page.wait_for_timeout(3000)
 
                 html = await page.content()
                 report_data = parse_financial_report(html)

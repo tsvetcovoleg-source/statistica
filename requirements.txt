@@ -3,4 +3,5 @@ gspread
 google-auth
 pandas
 beautifulsoup4
+html5lib
 lxml
