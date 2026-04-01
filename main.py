@@ -260,7 +260,7 @@ def upsert_report_to_sheet(ws, source_profile_url, report_data):
     return True
 
 
-def get_first_profile_links(ws_source, limit=5):
+def get_first_profile_links(ws_source, limit=10):
     values = ws_source.get_all_values()
     if not values:
         return []
@@ -376,7 +376,7 @@ async def process_all_periods(profile_url, ws):
     return len(periods), inserted_count
 
 
-async def run_profile_links_pipeline(ws_source, ws_result, limit=5):
+async def run_profile_links_pipeline(ws_source, ws_result, limit=10):
     links = get_first_profile_links(ws_source, limit=limit)
     print(f"Found links for processing: {len(links)}")
 
@@ -452,7 +452,7 @@ async def main():
 
     source_sheet_name = os.environ.get("SOURCE_SHEET_NAME", "IDNO")
     result_sheet_name = os.environ.get("RESULT_SHEET_NAME", "stat")
-    max_links = int(os.environ.get("MAX_PROFILE_LINKS", "5"))
+    max_links = int(os.environ.get("MAX_PROFILE_LINKS", "10"))
 
     creds = Credentials.from_service_account_info(
         json.loads(service_account_json),
