@@ -384,7 +384,6 @@ async def run_profile_links_pipeline(ws_source, ws_result, browser, limit=10):
                 print("Source status in column D: Done")
         except Exception as exc:
             print(f"{profile_url} | fatal error: {exc}")
-        await asyncio.sleep(2)
 
 
 def get_or_create_worksheet(spreadsheet, title, rows=2000, cols=20):
