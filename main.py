@@ -89,7 +89,7 @@ def parse_financial_report(html):
     full_text = soup.get_text("\n", strip=True)
 
     try:
-        tables = pd.read_html(StringIO(html))
+        tables = pd.read_html(StringIO(html), flavor="lxml")
     except ValueError:
         tables = []
 
