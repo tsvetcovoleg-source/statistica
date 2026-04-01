@@ -317,14 +317,9 @@ def mark_link_done(ws_source, profile_url):
     return False
 
 
-async def process_all_periods(profile_url, ws):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-        )
-        page = await browser.new_page(viewport={"width": 1800, "height": 5000})
-
+async def process_all_periods(profile_url, ws, browser):
+    page = await browser.new_page(viewport={"width": 1800, "height": 5000})
+    try:
         await page.goto(profile_url, wait_until="networkidle", timeout=120000)
         await page.wait_for_timeout(5000)
 
@@ -341,7 +336,6 @@ async def process_all_periods(profile_url, ws):
                 break
 
         if not tab_opened:
-            await browser.close()
             return 0, 0
 
         all_texts = await page.locator("body *").all_text_contents()
@@ -371,19 +365,19 @@ async def process_all_periods(profile_url, ws):
             except Exception as exc:
                 print(f"{profile_url} | period={period} | error: {exc}")
 
-        await browser.close()
+        return len(periods), inserted_count
+    finally:
+        await page.close()
 
-    return len(periods), inserted_count
 
-
-async def run_profile_links_pipeline(ws_source, ws_result, limit=10):
+async def run_profile_links_pipeline(ws_source, ws_result, browser, limit=10):
     links = get_first_profile_links(ws_source, limit=limit)
     print(f"Found links for processing: {len(links)}")
 
     for idx, profile_url in enumerate(links, start=1):
         print(f"[{idx}/{len(links)}] {profile_url}")
         try:
-            found_count, inserted_count = await process_all_periods(profile_url, ws_result)
+            found_count, inserted_count = await process_all_periods(profile_url, ws_result, browser)
             print(f"Reports found: {found_count} | inserted/updated: {inserted_count}")
             if found_count > 0 and inserted_count >= found_count:
                 mark_link_done(ws_source, profile_url)
@@ -472,7 +466,15 @@ async def main():
     print(f"Result sheet: {ws_result.title}")
     print(f"MAX_PROFILE_LINKS={max_links}")
 
-    await run_profile_links_pipeline(ws_source, ws_result, limit=max_links)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+        try:
+            await run_profile_links_pipeline(ws_source, ws_result, browser, limit=max_links)
+        finally:
+            await browser.close()
 
     print("=== DONE ===")
 
