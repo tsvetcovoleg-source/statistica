@@ -450,7 +450,7 @@ async def main():
     service_account_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
     sheet_id = os.environ["GOOGLE_SHEET_ID"]
 
-    source_sheet_name = os.environ.get("SOURCE_SHEET_NAME", "IDNO")
+    source_sheet_name = os.environ.get("SOURCE_SHEET_NAME", "links")
     result_sheet_name = os.environ.get("RESULT_SHEET_NAME", "stat")
     max_links = int(os.environ.get("MAX_PROFILE_LINKS", "10"))
 
