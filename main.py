@@ -145,7 +145,33 @@ def parse_financial_report(html):
     }
 
 
-def upsert_report_to_sheet(ws, source_profile_url, report_data):
+def build_result_sheet_cache(result_values):
+    if not result_values:
+        current_header = ["IDNO", "PROFILE_URL"]
+        rows = []
+    else:
+        current_header = list(result_values[0])
+        rows = [list(row) for row in result_values[1:]]
+
+    header_map = {name: idx for idx, name in enumerate(current_header)}
+    idno_to_row_index = {}
+    idno_idx = header_map.get("IDNO")
+    if idno_idx is not None:
+        for i, row in enumerate(rows, start=2):
+            row_idno = row[idno_idx] if len(row) > idno_idx else ""
+            row_idno = str(row_idno).strip()
+            if row_idno:
+                idno_to_row_index[row_idno] = i
+
+    return {
+        "current_header": current_header,
+        "header_map": header_map,
+        "rows": rows,
+        "idno_to_row_index": idno_to_row_index,
+    }
+
+
+def upsert_report_to_sheet(ws, source_profile_url, report_data, result_cache):
     info_map = get_info_map(report_data)
     idno_value = str(info_map.get("Cod IDNO", "")).strip()
     report_key = build_report_key(report_data)
@@ -167,34 +193,20 @@ def upsert_report_to_sheet(ws, source_profile_url, report_data):
         "CF": f"REPORT_KEY={report_key}\n{cashflow_csv}",
     }
 
-    headers = ["IDNO", "PROFILE_URL"]
-    all_values = ws.get_all_values()
-
-    if not all_values:
-        ws.append_row(headers)
-        all_values = [headers]
-
-    current_header = all_values[0]
-    header_map = {name: idx for idx, name in enumerate(current_header)}
+    current_header = result_cache["current_header"]
+    header_map = result_cache["header_map"]
+    rows = result_cache["rows"]
+    idno_to_row_index = result_cache["idno_to_row_index"]
 
     required_base_headers = ["IDNO", "PROFILE_URL"]
     missing_base_headers = [h for h in required_base_headers if h not in header_map]
     if missing_base_headers:
         current_header.extend(missing_base_headers)
         ws.update(range_name="1:1", values=[current_header])
-        all_values = ws.get_all_values()
-        current_header = all_values[0]
-        header_map = {name: idx for idx, name in enumerate(current_header)}
+        header_map.clear()
+        header_map.update({name: idx for idx, name in enumerate(current_header)})
 
-    rows = all_values[1:] if len(all_values) > 1 else []
-    target_row_index = None
-
-    for i, row in enumerate(rows, start=2):
-        idno_idx = header_map["IDNO"]
-        row_idno = row[idno_idx] if len(row) > idno_idx else ""
-        if str(row_idno).strip() == idno_value:
-            target_row_index = i
-            break
+    target_row_index = idno_to_row_index.get(idno_value)
 
     report_sections = ["META", "BIL", "PNL", "EQT", "CF"]
 
@@ -250,12 +262,15 @@ def upsert_report_to_sheet(ws, source_profile_url, report_data):
 
     if target_row_index is None:
         ws.append_row(padded_row)
+        rows.append(list(padded_row))
+        idno_to_row_index[idno_value] = len(rows) + 1
     else:
         end_col_letter = gspread.utils.rowcol_to_a1(1, len(current_header)).rstrip("1")
         ws.update(
             range_name=f"A{target_row_index}:{end_col_letter}{target_row_index}",
             values=[padded_row],
         )
+        rows[target_row_index - 2] = list(padded_row)
 
     return True
 
@@ -304,7 +319,7 @@ def mark_link_done(ws_source, profile_url, profile_url_to_row):
     return False
 
 
-async def process_all_periods(profile_url, ws, browser):
+async def process_all_periods(profile_url, ws, browser, result_cache):
     page = await browser.new_page(viewport={"width": 1800, "height": 5000})
     try:
         await page.goto(profile_url, wait_until="networkidle", timeout=120000)
@@ -346,7 +361,7 @@ async def process_all_periods(profile_url, ws, browser):
 
                 html = await page.content()
                 report_data = parse_financial_report(html)
-                saved = upsert_report_to_sheet(ws, profile_url, report_data)
+                saved = upsert_report_to_sheet(ws, profile_url, report_data, result_cache)
                 if saved:
                     inserted_count += 1
             except Exception as exc:
@@ -360,6 +375,8 @@ async def process_all_periods(profile_url, ws, browser):
 async def run_profile_links_pipeline(ws_source, ws_result, browser, limit=10):
     links = get_first_profile_links(ws_source, limit=limit)
     print(f"Found links for processing: {len(links)}")
+    result_values = ws_result.get_all_values()
+    result_cache = build_result_sheet_cache(result_values)
     values = ws_source.get_all_values()
     profile_url_to_row = {}
     for row_idx, row in enumerate(values[1:], start=2):
@@ -369,7 +386,7 @@ async def run_profile_links_pipeline(ws_source, ws_result, browser, limit=10):
     for idx, profile_url in enumerate(links, start=1):
         print(f"[{idx}/{len(links)}] {profile_url}")
         try:
-            found_count, inserted_count = await process_all_periods(profile_url, ws_result, browser)
+            found_count, inserted_count = await process_all_periods(profile_url, ws_result, browser, result_cache)
             print(f"Reports found: {found_count} | inserted/updated: {inserted_count}")
             if found_count > 0 and inserted_count >= found_count:
                 mark_link_done(ws_source, profile_url, profile_url_to_row)
