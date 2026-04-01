@@ -3,6 +3,7 @@ import csv
 import json
 import os
 import re
+import time
 from io import StringIO
 
 import gspread
@@ -319,9 +320,12 @@ def mark_link_done(ws_source, profile_url):
 
 async def process_all_periods(profile_url, ws, browser):
     page = await browser.new_page(viewport={"width": 1800, "height": 5000})
+    profile_start = time.perf_counter()
     try:
+        goto_start = time.perf_counter()
         await page.goto(profile_url, wait_until="networkidle", timeout=120000)
         await page.wait_for_timeout(3500)
+        print(f"GOTO done in {time.perf_counter() - goto_start:.2f}s")
 
         tabs = page.locator('[role="tab"]')
         tab_opened = False
@@ -330,8 +334,10 @@ async def process_all_periods(profile_url, ws, browser):
             tab = tabs.nth(i)
             text = (await tab.inner_text()).strip()
             if "Situaţii financiare publice" in text:
+                tab_open_start = time.perf_counter()
                 await tab.click()
                 await page.wait_for_timeout(2200)
+                print(f"Financial tab opened in {time.perf_counter() - tab_open_start:.2f}s")
                 tab_opened = True
                 break
 
@@ -349,6 +355,7 @@ async def process_all_periods(profile_url, ws, browser):
         inserted_count = 0
 
         for period in periods:
+            period_load_start = time.perf_counter()
             try:
                 period_btn = page.locator(f"text={period}")
                 if await period_btn.count() == 0:
@@ -358,15 +365,22 @@ async def process_all_periods(profile_url, ws, browser):
                 await page.wait_for_timeout(3000)
 
                 html = await page.content()
+                print(f"period={period} loaded in {time.perf_counter() - period_load_start:.2f}s")
+                parse_start = time.perf_counter()
                 report_data = parse_financial_report(html)
+                print(f"period={period} parsed in {time.perf_counter() - parse_start:.2f}s")
                 saved = upsert_report_to_sheet(ws, profile_url, report_data)
                 if saved:
                     inserted_count += 1
             except Exception as exc:
-                print(f"{profile_url} | period={period} | error: {exc}")
+                print(
+                    f"{profile_url} | period={period} | error after "
+                    f"{time.perf_counter() - period_load_start:.2f}s: {exc}"
+                )
 
         return len(periods), inserted_count
     finally:
+        print(f"Profile processed in {time.perf_counter() - profile_start:.2f}s")
         await page.close()
 
 
