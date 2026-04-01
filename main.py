@@ -361,14 +361,27 @@ async def process_all_periods(profile_url, ws, browser):
                 if await period_btn.count() == 0:
                     continue
 
-                await period_btn.first.click()
-                await page.wait_for_timeout(3000)
+                report_data = None
+                last_exc = None
+                for attempt, wait_ms in enumerate([3000, 4500, 6500], start=1):
+                    period_load_start = time.perf_counter()
+                    try:
+                        await period_btn.first.click()
+                        await page.wait_for_timeout(wait_ms)
 
-                html = await page.content()
-                print(f"period={period} loaded in {time.perf_counter() - period_load_start:.2f}s")
-                parse_start = time.perf_counter()
-                report_data = parse_financial_report(html)
-                print(f"period={period} parsed in {time.perf_counter() - parse_start:.2f}s")
+                        html = await page.content()
+                        print(f"period={period} loaded in {time.perf_counter() - period_load_start:.2f}s")
+                        parse_start = time.perf_counter()
+                        report_data = parse_financial_report(html)
+                        print(f"period={period} parsed in {time.perf_counter() - parse_start:.2f}s")
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        if attempt < 3:
+                            print(f"attempt {attempt} failed after {wait_ms}ms, retrying...")
+                        else:
+                            raise last_exc
+
                 saved = upsert_report_to_sheet(ws, profile_url, report_data)
                 if saved:
                     inserted_count += 1
