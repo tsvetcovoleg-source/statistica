@@ -296,19 +296,37 @@ def get_first_profile_links(ws_source, limit=10):
     return links
 
 
-def mark_link_done(ws_source, profile_url, profile_url_to_row):
-    row_idx = profile_url_to_row.get(profile_url)
-    if row_idx:
-        ws_source.update_cell(row_idx, 4, "Done")
-        return True
+def mark_link_done(ws_source, profile_url):
+    values = ws_source.get_all_values()
+    if not values:
+        return False
+
+    # По задаче статус Done должен ставиться в колонке D.
+    done_col_idx = 3
+    required_cols = done_col_idx + 1
+
+    if len(values[0]) < required_cols:
+        ws_source.add_cols(required_cols - len(values[0]))
+
+    for row_idx, row in enumerate(values[1:], start=2):
+        row_profile_url = row[1].strip() if len(row) > 1 else ""
+        if row_profile_url == profile_url:
+            ws_source.update_cell(row_idx, done_col_idx + 1, "Done")
+            return True
+
     return False
 
 
-async def process_all_periods(profile_url, ws, browser):
-    page = await browser.new_page(viewport={"width": 1800, "height": 5000})
-    try:
+async def process_all_periods(profile_url, ws):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+        page = await browser.new_page(viewport={"width": 1800, "height": 5000})
+
         await page.goto(profile_url, wait_until="networkidle", timeout=120000)
-        await page.wait_for_timeout(3500)
+        await page.wait_for_timeout(5000)
 
         tabs = page.locator('[role="tab"]')
         tab_opened = False
@@ -318,11 +336,12 @@ async def process_all_periods(profile_url, ws, browser):
             text = (await tab.inner_text()).strip()
             if "Situaţii financiare publice" in text:
                 await tab.click()
-                await page.wait_for_timeout(2200)
+                await page.wait_for_timeout(3000)
                 tab_opened = True
                 break
 
         if not tab_opened:
+            await browser.close()
             return 0, 0
 
         all_texts = await page.locator("body *").all_text_contents()
@@ -342,7 +361,7 @@ async def process_all_periods(profile_url, ws, browser):
                     continue
 
                 await period_btn.first.click()
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(4000)
 
                 html = await page.content()
                 report_data = parse_financial_report(html)
@@ -352,27 +371,22 @@ async def process_all_periods(profile_url, ws, browser):
             except Exception as exc:
                 print(f"{profile_url} | period={period} | error: {exc}")
 
-        return len(periods), inserted_count
-    finally:
-        await page.close()
+        await browser.close()
+
+    return len(periods), inserted_count
 
 
-async def run_profile_links_pipeline(ws_source, ws_result, browser, limit=10):
+async def run_profile_links_pipeline(ws_source, ws_result, limit=10):
     links = get_first_profile_links(ws_source, limit=limit)
     print(f"Found links for processing: {len(links)}")
-    values = ws_source.get_all_values()
-    profile_url_to_row = {}
-    for row_idx, row in enumerate(values[1:], start=2):
-        if len(row) > 1:
-            profile_url_to_row[row[1].strip()] = row_idx
 
     for idx, profile_url in enumerate(links, start=1):
         print(f"[{idx}/{len(links)}] {profile_url}")
         try:
-            found_count, inserted_count = await process_all_periods(profile_url, ws_result, browser)
+            found_count, inserted_count = await process_all_periods(profile_url, ws_result)
             print(f"Reports found: {found_count} | inserted/updated: {inserted_count}")
             if found_count > 0 and inserted_count >= found_count:
-                mark_link_done(ws_source, profile_url, profile_url_to_row)
+                mark_link_done(ws_source, profile_url)
                 print("Source status in column D: Done")
         except Exception as exc:
             print(f"{profile_url} | fatal error: {exc}")
@@ -458,15 +472,7 @@ async def main():
     print(f"Result sheet: {ws_result.title}")
     print(f"MAX_PROFILE_LINKS={max_links}")
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-        )
-        try:
-            await run_profile_links_pipeline(ws_source, ws_result, browser, limit=max_links)
-        finally:
-            await browser.close()
+    await run_profile_links_pipeline(ws_source, ws_result, limit=max_links)
 
     print("=== DONE ===")
 
